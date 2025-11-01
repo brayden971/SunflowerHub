@@ -18,7 +18,12 @@ local HIVE_CHECK_INTERVAL = 10
 -- Field Coordinates
 local fieldCoords = {
     ["Mushroom Field"] = Vector3.new(-896.98, 73.50, -124.88),
-    ["Blueberry Field"] = Vector3.new(-752.17, 73.50, -98.35)
+    ["Blueberry Field"] = Vector3.new(-752.17, 73.50, -98.35),
+    ["Clover Field"] = Vector3.new(-644.85, 90.94, -87.69),
+    ["Spider Field"] = Vector3.new(-902.24, 88.77, -220.61),
+    ["Pineapple Field"] = Vector3.new(-612.01, 118.17, -271.24),
+    ["Mountain Field"] = Vector3.new(-714.25, 175.73, -478.03),
+    ["Pine Tree Field"] = Vector3.new(-626.49, 171.32, -456.12)
 }
 
 -- Hive Coordinates
@@ -549,7 +554,7 @@ local function moveToPosition(targetPos)
     return success
 end
 
--- Optimized Movement Functions
+-- Optimized Movement Functions with obstacle avoidance
 local function getRandomPositionInField()
     local fieldPos = fieldCoords[toggles.field]
     if not fieldPos then return nil end
@@ -559,7 +564,34 @@ local function getRandomPositionInField()
     local randomZ = fieldPos.Z + math.random(-fieldRadius, fieldRadius)
     local randomY = fieldPos.Y
     
-    return Vector3.new(randomX, randomY, randomZ)
+    local randomPos = Vector3.new(randomX, randomY, randomZ)
+    
+    -- Obstacle avoidance for specific fields
+    if toggles.field == "Mountain Field" then
+        for _, obj in pairs(workspace:GetDescendants()) do
+            if obj:IsA("BasePart") and obj.Name:lower():find("chick") then
+                local distance = (randomPos - obj.Position).Magnitude
+                if distance < 7 then
+                    -- Move away from chick
+                    local direction = (randomPos - obj.Position).Unit
+                    randomPos = obj.Position + (direction * 7)
+                end
+            end
+        end
+    elseif toggles.field == "Pine Tree Field" then
+        for _, obj in pairs(workspace:GetDescendants()) do
+            if obj:IsA("BasePart") and obj.Name:lower():find("cactus") then
+                local distance = (randomPos - obj.Position).Magnitude
+                if distance < 7 then
+                    -- Move away from cactus
+                    local direction = (randomPos - obj.Position).Unit
+                    randomPos = obj.Position + (direction * 7)
+                end
+            end
+        end
+    end
+    
+    return randomPos
 end
 
 local function performContinuousMovement()
@@ -878,7 +910,7 @@ local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/d
 
 local Window = Library:CreateWindow({
     Title = "Lavender Hub",
-    Footer = "v0.4 (Davi is a sigma)",
+    Footer = "v0.2 (davi is a sigma)",
     ToggleKeybind = Enum.KeyCode.RightControl,
     Center = true,
     AutoShow = true,
@@ -898,7 +930,7 @@ local MainTab = Window:AddTab("Farming", "shovel")
 -- Farming Settings
 local FarmingGroupbox = MainTab:AddLeftGroupbox("Farming")
 local FieldDropdown = FarmingGroupbox:AddDropdown("FieldDropdown", {
-    Values = {"Mushroom Field", "Blueberry Field"},
+    Values = {"Mushroom Field", "Blueberry Field", "Clover Field", "Spider Field", "Pineapple Field", "Mountain Field", "Pine Tree Field"},
     Default = 1,
     Multi = false,
     Text = "Field",
@@ -1030,7 +1062,7 @@ local AntiLagToggle = AntiLagGroupbox:AddToggle("AntiLagToggle", {
 -- Console Tab
 local ConsoleTab = Window:AddTab("Console", "terminal")
 local ConsoleGroupbox = ConsoleTab:AddLeftGroupbox("Output")
-consoleLabel = ConsoleGroupbox:AddLabel({ Text = "Lavender Hub v0.4 Ready", DoesWrap = true })
+consoleLabel = ConsoleGroupbox:AddLabel({ Text = "Lavender Hub v0.2 Ready", DoesWrap = true })
 
 -- Debug Tab
 local DebugTab = Window:AddTab("Debug", "bug")
@@ -1073,7 +1105,6 @@ local StatusGroupbox = MainTab:AddRightGroupbox("Status")
 local StatusLabel = StatusGroupbox:AddLabel("Status: Idle")
 local PollenLabel = StatusGroupbox:AddLabel("Pollen: 0")
 local HourlyHoneyLabel = StatusGroupbox:AddLabel("Hourly Honey: 0")
-
 -- UI Settings Tab
 local UISettingsTab = Window:AddTab("UI Settings", "settings")
 ThemeManager:SetLibrary(Library)
@@ -1163,7 +1194,7 @@ WalkspeedToggle:Set(toggles.walkspeedEnabled)
 WalkspeedSlider:Set(toggles.walkspeed)
 
 -- AUTO CLAIM ALL HIVES ON STARTUP
-addToConsole("🚀 Lavender Hub v0.4 Starting...")
+addToConsole("🚀 Lavender Hub v0.2 Starting...")
 addToConsole("🔄 Auto-claiming hives...")
 autoClaimHive()
 
