@@ -15,6 +15,13 @@ local CHECK_INTERVAL = 0.2
 local TOKEN_CLEAR_INTERVAL = 5
 local HIVE_CHECK_INTERVAL = 10
 
+-- Webhook Configuration
+local webhookEnabled = false
+local webhookURL = ""
+local webhookInterval = 5 -- minutes
+local lastWebhookTime = 0
+local webhookCooldownActive = false
+
 -- Field Coordinates
 local fieldCoords = {
     ["Mushroom Field"] = Vector3.new(-896.98, 73.50, -124.88),
@@ -73,13 +80,84 @@ local toggles = {
     }
 }
 
--- Honey tracking
+-- Honey tracking - IMPROVED
 local honeyStats = {
     startHoney = 0,
     currentHoney = 0,
     lastHoneyCheck = tick(),
     honeyMade = 0,
-    hourlyRate = 0
+    hourlyRate = 0,
+    lastHoneyValue = 0,
+    trackingStarted = false,
+    startTrackingTime = 0,
+    firstAutoFarmEnabled = false
+}
+
+-- IMPROVED AUTO SPRINKLERS SYSTEM - MORE STABLE
+local autoSprinklersEnabled = false
+local selectedSprinkler = "Basic Sprinkler"
+local sprinklerPlacementCount = 0
+local lastSprinklerPlaceTime = 0
+local sprinklerCooldown = 3 -- Increased for stability
+local currentFieldVisits = {} -- Track visits per field
+local placingSprinklers = false
+local sprinklersPlaced = false
+local sprinklerRetryCount = 0
+local MAX_SPRINKLER_RETRIES = 3
+local lastFieldBeforeConvert = nil -- Track which field we were at before converting
+local placedSprinklersCount = 0 -- Track how many sprinklers we've placed
+local expectedSprinklerCount = 0 -- Expected number based on sprinkler type
+
+-- Sprinkler configurations with exact placement patterns
+local sprinklerConfigs = {
+    ["Broken Sprinkler"] = {
+        count = 1,
+        pattern = function(fieldPos)
+            return {fieldPos} -- Center
+        end
+    },
+    ["Basic Sprinkler"] = {
+        count = 1,
+        pattern = function(fieldPos)
+            return {fieldPos} -- Center
+        end
+    },
+    ["Silver Soakers"] = {
+        count = 2,
+        pattern = function(fieldPos)
+            return {
+                fieldPos + Vector3.new(-2, 0, 0),  -- Left 4 studs
+                fieldPos + Vector3.new(2, 0, 0)    -- Right 4 studs
+            }
+        end
+    },
+    ["Golden Gushers"] = {
+        count = 3,
+        pattern = function(fieldPos)
+            return {
+                fieldPos + Vector3.new(-2, 0, 0),  -- Left 4 studs
+                fieldPos + Vector3.new(2, 0, 0),   -- Right 4 studs
+                fieldPos + Vector3.new(0, 0, -1.5) -- Down 3 studs (middle)
+            }
+        end
+    },
+    ["Diamond Drenchers"] = {
+        count = 4,
+        pattern = function(fieldPos)
+            return {
+                fieldPos + Vector3.new(-2, 0, -2),  -- Top Left
+                fieldPos + Vector3.new(2, 0, -2),   -- Top Right
+                fieldPos + Vector3.new(-2, 0, 2),   -- Bottom Left
+                fieldPos + Vector3.new(2, 0, 2)     -- Bottom Right
+            }
+        end
+    },
+    ["Supreme Saturator"] = {
+        count = 1,
+        pattern = function(fieldPos)
+            return {fieldPos} -- Center
+        end
+    }
 }
 
 local player = Players.LocalPlayer
@@ -95,6 +173,82 @@ local consoleLabel = nil
 
 -- Debug System
 local debugLabels = {}
+
+-- Get current pollen value
+local function getCurrentPollen()
+    local pollenValue = player:FindFirstChild("Pollen")
+    if pollenValue and pollenValue:IsA("NumberValue") then
+        return pollenValue.Value
+    end
+    return 0
+end
+
+-- Get current honey value - FIXED METHOD
+local function getCurrentHoney()
+    for _, child in pairs(player:GetChildren()) do
+        if child:IsA("NumberValue") and child.Name:lower():find("honey") then
+            return child.Value
+        end
+    end
+    return 0
+end
+
+-- FIXED: Format numbers with K, M, B, T, Q - CORRECT ORDER
+local function formatNumberCorrect(num)
+    if num < 1000 then
+        return tostring(math.floor(num))
+    elseif num < 1000000 then
+        -- Thousands
+        local formatted = num / 1000
+        if formatted >= 100 then
+            return string.format("%.0fK", formatted)
+        elseif formatted >= 10 then
+            return string.format("%.1fK", formatted)
+        else
+            return string.format("%.2fK", formatted)
+        end
+    elseif num < 1000000000 then
+        -- Millions
+        local formatted = num / 1000000
+        if formatted >= 100 then
+            return string.format("%.0fM", formatted)
+        elseif formatted >= 10 then
+            return string.format("%.1fM", formatted)
+        else
+            return string.format("%.2fM", formatted)
+        end
+    elseif num < 1000000000000 then
+        -- Billions
+        local formatted = num / 1000000000
+        if formatted >= 100 then
+            return string.format("%.0fB", formatted)
+        elseif formatted >= 10 then
+            return string.format("%.1fB", formatted)
+        else
+            return string.format("%.2fB", formatted)
+        end
+    elseif num < 1000000000000000 then
+        -- Trillions
+        local formatted = num / 1000000000000
+        if formatted >= 100 then
+            return string.format("%.0fT", formatted)
+        elseif formatted >= 10 then
+            return string.format("%.1fT", formatted)
+        else
+            return string.format("%.2fT", formatted)
+        end
+    else
+        -- Quadrillions
+        local formatted = num / 1000000000000000
+        if formatted >= 100 then
+            return string.format("%.0fQ", formatted)
+        elseif formatted >= 10 then
+            return string.format("%.1fQ", formatted)
+        else
+            return string.format("%.2fQ", formatted)
+        end
+    end
+end
 
 local function addToConsole(message)
     local timestamp = os.date("%H:%M:%S")
@@ -122,7 +276,12 @@ local function saveSettings()
         antiLag = toggles.antiLag,
         tweenSpeed = toggles.tweenSpeed,
         walkspeedEnabled = toggles.walkspeedEnabled,
-        walkspeed = toggles.walkspeed
+        walkspeed = toggles.walkspeed,
+        autoSprinklersEnabled = autoSprinklersEnabled,
+        selectedSprinkler = selectedSprinkler,
+        webhookEnabled = webhookEnabled,
+        webhookURL = webhookURL,
+        webhookInterval = webhookInterval
     }
     
     local success, encoded = pcall(function()
@@ -162,6 +321,11 @@ local function loadSettings()
             toggles.tweenSpeed = decoded.tweenSpeed or toggles.tweenSpeed
             toggles.walkspeedEnabled = decoded.walkspeedEnabled or toggles.walkspeedEnabled
             toggles.walkspeed = decoded.walkspeed or toggles.walkspeed
+            autoSprinklersEnabled = decoded.autoSprinklersEnabled or autoSprinklersEnabled
+            selectedSprinkler = decoded.selectedSprinkler or selectedSprinkler
+            webhookEnabled = decoded.webhookEnabled or webhookEnabled
+            webhookURL = decoded.webhookURL or webhookURL
+            webhookInterval = decoded.webhookInterval or webhookInterval
             addToConsole("Settings loaded")
             return true
         end
@@ -169,7 +333,6 @@ local function loadSettings()
     addToConsole("No saved settings")
     return false
 end
-
 -- Simple Anti-Lag System
 local function runAntiLag()
     if not toggles.antiLag then return end
@@ -207,42 +370,6 @@ local function runAntiLag()
     addToConsole("🌿 Deleted " .. deleted .. " laggy objects")
 end
 
--- Fixed Auto Claim Hive System
-local function autoClaimHive()
-    addToConsole("🔍 Auto-claiming hives...")
-    
-    local claimRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("ClaimHive")
-    
-    for i = 1, 5 do
-        local hiveName = "Hive_" .. i
-        addToConsole("🔄 Claiming " .. hiveName .. "...")
-        
-        local success, result = pcall(function()
-            local hive = workspace:WaitForChild("Hives"):WaitForChild("Hive_" .. i)
-            local args = {hive}
-            claimRemote:FireServer(unpack(args))
-        end)
-        
-        if success then
-            addToConsole("✅ Claim request sent for " .. hiveName)
-        else
-            addToConsole("❌ Failed to claim " .. hiveName)
-        end
-        
-        task.wait(0.5)
-    end
-    
-    addToConsole("🎉 Finished auto-claiming all hives")
-    
-    task.wait(2)
-    local ownedHive = getOwnedHive()
-    if ownedHive then
-        addToConsole("🏠 Successfully claimed: " .. ownedHive)
-    else
-        addToConsole("💔 No hive claimed")
-    end
-end
-
 -- Performance Monitoring
 local function updatePerformanceStats()
     toggles.performanceStats.fps = math.floor(1 / RunService.Heartbeat:Wait())
@@ -271,64 +398,46 @@ local function SafeCall(func, name)
     return success
 end
 
-local function formatNumber(num)
-    if num < 1000 then return tostring(math.floor(num)) end
-    local suffixes = {"K", "M", "B", "T"}
-    local i = 1
-    while num >= 1000 and i < #suffixes do
-        num = num / 1000
-        i = i + 1
-    end
-    return string.format("%.1f%s", num, suffixes[i])
-end
-
--- Get current pollen value
-local function getCurrentPollen()
-    local pollenValue = player:FindFirstChild("Pollen")
-    if pollenValue and pollenValue:IsA("NumberValue") then
-        return pollenValue.Value
-    end
-    return 0
-end
-
--- Get current honey value
-local function getCurrentHoney()
-    local leaderstats = player:FindFirstChild("leaderstats")
-    if leaderstats then
-        local honey = leaderstats:FindFirstChild("Honey")
-        if honey then
-            return honey.Value
-        end
-    end
-    return 0
-end
-
--- Update honey statistics
+-- IMPROVED: Update honey statistics - starts at 0, continues tracking after first auto farm
 local function updateHoneyStats()
     local currentHoney = getCurrentHoney()
     
-    if honeyStats.startHoney == 0 then
+    -- Initialize tracking when auto farm is first enabled
+    if toggles.autoFarm and not honeyStats.firstAutoFarmEnabled then
+        honeyStats.firstAutoFarmEnabled = true
+        honeyStats.trackingStarted = true
+        honeyStats.startTrackingTime = tick()
         honeyStats.startHoney = currentHoney
         honeyStats.currentHoney = currentHoney
+        honeyStats.lastHoneyValue = currentHoney
+        honeyStats.honeyMade = 0
+        honeyStats.hourlyRate = 0
         honeyStats.lastHoneyCheck = tick()
+        addToConsole("📊 Honey tracking started")
         return
     end
     
-    if currentHoney > honeyStats.currentHoney then
-        honeyStats.honeyMade = honeyStats.honeyMade + (currentHoney - honeyStats.currentHoney)
+    -- Only track if we've started tracking
+    if not honeyStats.trackingStarted then
+        honeyStats.lastHoneyValue = currentHoney
+        return
+    end
+    
+    -- Track gains
+    if currentHoney > honeyStats.lastHoneyValue then
+        local honeyGained = currentHoney - honeyStats.lastHoneyValue
+        honeyStats.honeyMade = honeyStats.honeyMade + honeyGained
         honeyStats.currentHoney = currentHoney
+        honeyStats.lastHoneyValue = currentHoney
         
-        -- Calculate hourly rate
-        local timeElapsed = (tick() - honeyStats.lastHoneyCheck) / 3600 -- Convert to hours
+        -- Calculate hourly rate based on actual tracking time
+        local timeElapsed = (tick() - honeyStats.startTrackingTime) / 3600 -- Convert to hours
         if timeElapsed > 0 then
             honeyStats.hourlyRate = honeyStats.honeyMade / timeElapsed
         end
-    elseif currentHoney < honeyStats.currentHoney then
-        -- Honey decreased, reset tracking
-        honeyStats.startHoney = currentHoney
-        honeyStats.currentHoney = currentHoney
-        honeyStats.honeyMade = 0
-        honeyStats.lastHoneyCheck = tick()
+    elseif currentHoney < honeyStats.lastHoneyValue then
+        -- Honey decreased, update tracking but don't reset
+        honeyStats.lastHoneyValue = currentHoney
     end
 end
 
@@ -367,6 +476,7 @@ local function checkHiveOwnership()
         toggles.lastHiveCheckTime = tick()
     end
 end
+
 -- FIXED SMOOTH TWEEN MOVEMENT SYSTEM
 local function smoothTweenToPosition(targetPos)
     local character = GetCharacter()
@@ -554,7 +664,7 @@ local function moveToPosition(targetPos)
     return success
 end
 
--- Optimized Movement Functions with obstacle avoidance
+-- Optimized Movement Functions
 local function getRandomPositionInField()
     local fieldPos = fieldCoords[toggles.field]
     if not fieldPos then return nil end
@@ -564,34 +674,7 @@ local function getRandomPositionInField()
     local randomZ = fieldPos.Z + math.random(-fieldRadius, fieldRadius)
     local randomY = fieldPos.Y
     
-    local randomPos = Vector3.new(randomX, randomY, randomZ)
-    
-    -- Obstacle avoidance for specific fields
-    if toggles.field == "Mountain Field" then
-        for _, obj in pairs(workspace:GetDescendants()) do
-            if obj:IsA("BasePart") and obj.Name:lower():find("chick") then
-                local distance = (randomPos - obj.Position).Magnitude
-                if distance < 7 then
-                    -- Move away from chick
-                    local direction = (randomPos - obj.Position).Unit
-                    randomPos = obj.Position + (direction * 7)
-                end
-            end
-        end
-    elseif toggles.field == "Pine Tree Field" then
-        for _, obj in pairs(workspace:GetDescendants()) do
-            if obj:IsA("BasePart") and obj.Name:lower():find("cactus") then
-                local distance = (randomPos - obj.Position).Magnitude
-                if distance < 7 then
-                    -- Move away from cactus
-                    local direction = (randomPos - obj.Position).Unit
-                    randomPos = obj.Position + (direction * 7)
-                end
-            end
-        end
-    end
-    
-    return randomPos
+    return Vector3.new(randomX, randomY, randomZ)
 end
 
 local function performContinuousMovement()
@@ -615,6 +698,295 @@ local function performContinuousMovement()
             toggles.currentTarget = nil
         end
     end
+end
+-- IMPROVED AUTO SPRINKLERS SYSTEM - MORE STABLE AND RELIABLE
+local function getFieldFlowerPart(fieldName)
+    local fieldsFolder = workspace:WaitForChild("Fields")
+    local field = fieldsFolder:WaitForChild(fieldName)
+    if field then
+        return field:WaitForChild("FlowerPart")
+    end
+    return nil
+end
+
+local function useSprinklerRemote(fieldName)
+    local flowerPart = getFieldFlowerPart(fieldName)
+    if not flowerPart then
+        addToConsole("❌ Could not find FlowerPart")
+        return false
+    end
+    
+    local useItemRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("UseItem")
+    
+    local args = {
+        "Sprinkler",
+        flowerPart
+    }
+    
+    local success, result = pcall(function()
+        useItemRemote:FireServer(unpack(args))
+        return true
+    end)
+    
+    if success then
+        return true
+    else
+        return false
+    end
+end
+
+-- NEW: Function to detect how many sprinklers are currently placed
+local function getPlacedSprinklersCount()
+    local placedCount = 0
+    local character = GetCharacter()
+    
+    -- Check for sprinkler tools equipped or in backpack
+    if character then
+        for _, tool in pairs(character:GetChildren()) do
+            if tool:IsA("Tool") and tool.Name:lower():find("sprinkler") then
+                placedCount = placedCount + 1
+            end
+        end
+    end
+    
+    local backpack = player:FindFirstChild("Backpack")
+    if backpack then
+        for _, tool in pairs(backpack:GetChildren()) do
+            if tool:IsA("Tool") and tool.Name:lower():find("sprinkler") then
+                placedCount = placedCount + 1
+            end
+        end
+    end
+    
+    return placedCount
+end
+
+-- IMPROVED: More reliable sprinkler placement with detection
+local function placeSprinklers()
+    if not autoSprinklersEnabled then return end
+    if not toggles.autoFarm then return end
+    if toggles.isConverting then return end
+    if placingSprinklers then return end
+    if not toggles.atField then return end
+    
+    -- NEW: Don't place sprinklers if returning to same field after converting
+    if lastFieldBeforeConvert == toggles.field then
+        sprinklersPlaced = true
+        return
+    end
+    
+    local currentTime = tick()
+    if currentTime - lastSprinklerPlaceTime < sprinklerCooldown then return end
+    
+    placingSprinklers = true
+    
+    local config = sprinklerConfigs[selectedSprinkler]
+    if not config then
+        placingSprinklers = false
+        return
+    end
+    
+    -- Get expected sprinkler count
+    expectedSprinklerCount = config.count
+    
+    -- NEW: Check how many sprinklers are already placed
+    local currentPlacedCount = getPlacedSprinklersCount()
+    placedSprinklersCount = currentPlacedCount
+    
+    -- If we already have the expected number of sprinklers, mark as placed
+    if currentPlacedCount >= expectedSprinklerCount then
+        sprinklersPlaced = true
+        placingSprinklers = false
+        return
+    end
+    
+    -- Track field visits
+    if not currentFieldVisits[toggles.field] then
+        currentFieldVisits[toggles.field] = 0
+    end
+    currentFieldVisits[toggles.field] = currentFieldVisits[toggles.field] + 1
+    
+    local visitCount = currentFieldVisits[toggles.field]
+    local placementCount = config.count
+    
+    -- Get field position for pattern calculation
+    local fieldPos = fieldCoords[toggles.field]
+    if not fieldPos then
+        placingSprinklers = false
+        return
+    end
+    
+    -- Get sprinkler positions based on exact pattern
+    local positions = config.pattern(fieldPos)
+    
+    local successfulPlacements = 0
+    
+    -- IMPROVED: Better placement logic with retry mechanism
+    for i, position in ipairs(positions) do
+        if i > placementCount then break end
+        
+        -- NEW: Skip if we've already placed enough sprinklers
+        if getPlacedSprinklersCount() >= expectedSprinklerCount then
+            break
+        end
+        
+        -- Move to each position and place sprinkler
+        if moveToPosition(position) then
+            task.wait(0.8) -- Increased wait for stability
+            
+            -- Try to place sprinkler with retry logic
+            local placed = false
+            for retry = 1, 2 do
+                if useSprinklerRemote(toggles.field) then
+                    sprinklerPlacementCount = sprinklerPlacementCount + 1
+                    successfulPlacements = successfulPlacements + 1
+                    placed = true
+                    break
+                else
+                    task.wait(0.5)
+                end
+            end
+            
+            task.wait(0.5) -- Increased delay between placements
+        end
+    end
+    
+    -- NEW: Update placed sprinklers count
+    placedSprinklersCount = getPlacedSprinklersCount()
+    
+    -- IMPROVED: Reset sprinkler state based on success
+    if successfulPlacements > 0 or placedSprinklersCount >= expectedSprinklerCount then
+        sprinklersPlaced = true
+        sprinklerRetryCount = 0
+    else
+        sprinklerRetryCount = sprinklerRetryCount + 1
+        
+        if sprinklerRetryCount >= MAX_SPRINKLER_RETRIES then
+            resetSprinklers()
+            sprinklerRetryCount = 0
+        end
+    end
+    
+    lastSprinklerPlaceTime = currentTime
+    placingSprinklers = false
+end
+
+-- IMPROVED: Better sprinkler reset with field visit tracking
+local function resetSprinklers()
+    sprinklersPlaced = false
+    sprinklerRetryCount = 0
+    
+    -- Reset visit count for current field to force fresh placement
+    if currentFieldVisits[toggles.field] then
+        currentFieldVisits[toggles.field] = 0
+    end
+end
+
+-- IMPROVED: More reliable field changing with better sprinkler management
+local function changeFieldWhileFarming(newField)
+    if not toggles.autoFarm or not toggles.isFarming then return end
+    
+    local newFieldPos = fieldCoords[newField]
+    if not newFieldPos then return end
+    
+    addToConsole("🔄 Changing field to: " .. newField)
+    
+    -- IMPROVED: Fire sprinkler remote multiple times to ensure unequip
+    if autoSprinklersEnabled then
+        for i = 1, 2 do
+            useSprinklerRemote(toggles.field)
+            task.wait(0.3)
+        end
+    end
+    
+    -- Reset sprinklers when changing fields
+    resetSprinklers()
+    
+    -- Move to new field with selected movement method
+    if moveToPosition(newFieldPos) then
+        toggles.field = newField
+        toggles.atField = true
+        local initialPollen = getCurrentPollen()
+        toggles.lastPollenValue = initialPollen
+        toggles.lastPollenChangeTime = tick()
+        toggles.fieldArrivalTime = tick()
+        toggles.hasCollectedPollen = (initialPollen > 0)
+        
+        -- IMPROVED: Wait a bit before placing sprinklers at new field
+        task.wait(1)
+        
+        -- Place sprinklers when changing fields
+        if autoSprinklersEnabled then
+            placeSprinklers()
+        end
+        
+        addToConsole("✅ Arrived at new field")
+    else
+        addToConsole("❌ Failed to reach new field")
+    end
+end
+
+-- Death respawn system
+local function onCharacterDeath()
+    if toggles.autoFarm and toggles.isFarming then
+        addToConsole("💀 Character died - respawning to field...")
+        
+        -- Wait for respawn
+        task.wait(3)
+        
+        -- Get new character
+        local character = GetCharacter()
+        if character then
+            -- Wait for character to fully load
+            task.wait(2)
+            
+            -- Reset sprinklers since they get unequipped on death
+            resetSprinklers()
+            
+            -- Tween back to field immediately
+            local fieldPos = fieldCoords[toggles.field]
+            if fieldPos then
+                addToConsole("🔄 Respawning to field")
+                if moveToPosition(fieldPos) then
+                    toggles.atField = true
+                    addToConsole("✅ Respawned to field successfully")
+                    
+                    -- IMPROVED: Better sprinkler placement after respawn
+                    if autoSprinklersEnabled then
+                        task.wait(1)
+                        for i = 1, 2 do
+                            if useSprinklerRemote(toggles.field) then
+                                sprinklerPlacementCount = sprinklerPlacementCount + 1
+                            end
+                            task.wait(0.5)
+                        end
+                        sprinklersPlaced = true
+                    end
+                else
+                    addToConsole("❌ Failed to respawn to field")
+                end
+            end
+        end
+    end
+end
+
+-- Setup death detection
+local function setupDeathDetection()
+    local character = GetCharacter()
+    local humanoid = character:FindFirstChild("Humanoid")
+    
+    if humanoid then
+        humanoid.Died:Connect(onCharacterDeath)
+    end
+    
+    -- Also connect to character added for future characters
+    player.CharacterAdded:Connect(function(newCharacter)
+        task.wait(1) -- Wait for character to load
+        local newHumanoid = newCharacter:FindFirstChild("Humanoid")
+        if newHumanoid then
+            newHumanoid.Died:Connect(onCharacterDeath)
+        end
+    end)
 end
 
 -- Auto Equip Tools Function
@@ -644,7 +1016,7 @@ local function autoEquipTools()
     lastEquipTime = tick()
 end
 
--- Auto-dig function - UPDATED FOR ALL DIGGERS
+-- Auto-dig function - UPDATED FOR ALL TOOLS
 local function DigLoop()
     if digRunning then return end
     digRunning = true
@@ -671,7 +1043,6 @@ local function DigLoop()
     
     digRunning = false
 end
-
 -- Token Collection
 local isCollectingToken = false
 
@@ -748,6 +1119,7 @@ local function shouldReturnToField()
     local currentPollen = getCurrentPollen()
     return currentPollen == 0
 end
+
 -- Farming Logic
 local function startFarming()
     if not toggles.autoFarm or toggles.isFarming or not ownedHive then return end
@@ -780,6 +1152,12 @@ local function startFarming()
         
         addToConsole("✅ Arrived at field")
         
+        -- IMPROVED: Better sprinkler placement timing
+        if autoSprinklersEnabled then
+            task.wait(1) -- Wait a bit before placing
+            placeSprinklers()
+        end
+        
         -- Start auto-dig if enabled
         if toggles.autoDig then
             spawn(DigLoop)
@@ -790,33 +1168,11 @@ local function startFarming()
     end
 end
 
--- Function to change field while farming
-local function changeFieldWhileFarming(newField)
-    if not toggles.autoFarm or not toggles.isFarming then return end
-    
-    local newFieldPos = fieldCoords[newField]
-    if not newFieldPos then return end
-    
-    addToConsole("🔄 Changing field to: " .. newField)
-    
-    -- Move to new field with selected movement method
-    if moveToPosition(newFieldPos) then
-        toggles.field = newField
-        toggles.atField = true
-        local initialPollen = getCurrentPollen()
-        toggles.lastPollenValue = initialPollen
-        toggles.lastPollenChangeTime = tick()
-        toggles.fieldArrivalTime = tick()
-        toggles.hasCollectedPollen = (initialPollen > 0)
-        
-        addToConsole("✅ Arrived at new field: " .. newField)
-    else
-        addToConsole("❌ Failed to reach new field: " .. newField)
-    end
-end
-
 local function startConverting()
     if toggles.isConverting or not ownedHive then return end
+    
+    -- NEW: Remember which field we were at before converting
+    lastFieldBeforeConvert = toggles.field
     
     local hivePos = hiveCoords[ownedHive]
     if not hivePos then return end
@@ -836,7 +1192,7 @@ local function startConverting()
         
         task.wait(2)
         
-        -- Start honey making - UPDATED CONVERT SCRIPT
+        -- Start honey making - UPDATED FOR NEW GAME
         local makeHoneyRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("MakeHoney")
         if makeHoneyRemote then
             local args = {true}
@@ -881,6 +1237,8 @@ local function updateFarmState()
     elseif toggles.isConverting and toggles.atHive then
         if shouldReturnToField() then
             addToConsole("Returning to field")
+            -- Reset sprinklers when returning to field
+            resetSprinklers()
             startFarming()
         end
     end
@@ -903,6 +1261,102 @@ local function clearVisitedTokens()
     end
 end
 
+-- FIXED: Webhook System with cooldown protection
+local function sendWebhook()
+    if not webhookEnabled or webhookURL == "" then return end
+    
+    local currentTime = tick()
+    
+    -- Check if we're in cooldown period
+    if webhookCooldownActive then
+        if currentTime - lastWebhookTime >= (webhookInterval * 60) then
+            webhookCooldownActive = false
+        else
+            return
+        end
+    end
+    
+    -- Check if it's time to send webhook
+    if currentTime - lastWebhookTime < (webhookInterval * 60) then return end
+    
+    local requestFunc = (syn and syn.request) or (http and http.request) or http_request or request
+    if not requestFunc then
+        addToConsole("❌ No HTTP request function available")
+        return
+    end
+    
+    local currentHoney = getCurrentHoney()
+    local currentPollen = getCurrentPollen()
+    
+    local embed = {
+        title = "Lavender Hub Stats",
+        color = 0x9B59B6,
+        fields = {
+            {
+                name = "Player",
+                value = player.Name,
+                inline = true
+            },
+            {
+                name = "Current Honey",
+                value = formatNumberCorrect(currentHoney),
+                inline = true
+            },
+            {
+                name = "Current Pollen",
+                value = formatNumberCorrect(currentPollen),
+                inline = true
+            },
+            {
+                name = "Hourly Honey Rate",
+                value = formatNumberCorrect(honeyStats.hourlyRate) .. "/h",
+                inline = true
+            },
+            {
+                name = "Field",
+                value = toggles.field,
+                inline = true
+            },
+            {
+                name = "Status",
+                value = toggles.isFarming and "Farming" or toggles.isConverting and "Converting" or "Idle",
+                inline = true
+            }
+        },
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+        footer = {
+            text = "Lavender Hub • " .. os.date("%H:%M:%S")
+        }
+    }
+    
+    local payload = {
+        username = "Lavender Hub",
+        embeds = {embed}
+    }
+    
+    -- Set cooldown active before sending to prevent multiple sends
+    webhookCooldownActive = true
+    lastWebhookTime = currentTime
+    
+    local success, result = pcall(function()
+        local response = requestFunc({
+            Url = webhookURL,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json"
+            },
+            Body = HttpService:JSONEncode(payload)
+        })
+        return response
+    end)
+    
+    if success then
+        addToConsole("✅ Webhook sent successfully")
+    else
+        addToConsole("❌ Failed to send webhook: " .. tostring(result))
+        webhookCooldownActive = false -- Reset cooldown on failure
+    end
+end
 -- GUI Setup
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/refs/heads/main/Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/ThemeManager.lua"))()
@@ -910,7 +1364,7 @@ local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/d
 
 local Window = Library:CreateWindow({
     Title = "Lavender Hub",
-    Footer = "v0.2 (davi is a sigma)",
+    Footer = "v0.4 (Davi is a sigma)",
     ToggleKeybind = Enum.KeyCode.RightControl,
     Center = true,
     AutoShow = true,
@@ -987,6 +1441,39 @@ local AutoEquipToggle = FarmingGroupbox:AddToggle("AutoEquipToggle", {
         end
     end
 })
+
+-- IMPROVED AUTO SPRINKLERS - MORE STABLE
+local AutoSprinklersToggle = FarmingGroupbox:AddToggle("AutoSprinklersToggle", {
+    Text = "Auto Sprinklers",
+    Default = false,
+    Callback = function(Value)
+        autoSprinklersEnabled = Value
+        saveSettings()
+        if Value then
+            addToConsole("🚿 Auto Sprinklers enabled")
+            sprinklerPlacementCount = 0
+            sprinklerRetryCount = 0
+            currentFieldVisits = {} -- Reset visits when enabling
+            resetSprinklers()
+        else
+            addToConsole("🚿 Auto Sprinklers disabled")
+        end
+    end
+})
+
+local SprinklerDropdown = FarmingGroupbox:AddDropdown("SprinklerDropdown", {
+    Values = {"Broken Sprinkler", "Basic Sprinkler", "Silver Soakers", "Golden Gushers", "Diamond Drenchers", "Supreme Saturator"},
+    Default = 2,
+    Multi = false,
+    Text = "Sprinkler Type",
+    Callback = function(Value)
+        selectedSprinkler = Value
+        saveSettings()
+        addToConsole("🚿 Sprinkler type set to: " .. Value)
+        resetSprinklers() -- Reset when changing sprinkler type
+    end
+})
+
 -- Movement Settings
 local MovementGroupbox = MainTab:AddRightGroupbox("Movement")
 local MovementMethodDropdown = MovementGroupbox:AddDropdown("MovementMethod", {
@@ -1059,10 +1546,60 @@ local AntiLagToggle = AntiLagGroupbox:AddToggle("AntiLagToggle", {
     end
 })
 
+-- Webhook Tab
+local WebhookTab = Window:AddTab("Webhook", "globe")
+local WebhookGroupbox = WebhookTab:AddLeftGroupbox("Webhook Settings")
+
+local WebhookToggle = WebhookGroupbox:AddToggle("WebhookToggle", {
+    Text = "Enable Webhook",
+    Default = false,
+    Callback = function(Value)
+        webhookEnabled = Value
+        saveSettings()
+        if Value then
+            addToConsole("Webhook enabled")
+        else
+            addToConsole("Webhook disabled")
+        end
+    end
+})
+
+local WebhookURLBox = WebhookGroupbox:AddInput("WebhookURL", {
+    Text = "Webhook URL",
+    Default = "",
+    Placeholder = "https://discord.com/api/webhooks/...",
+    Callback = function(Value)
+        webhookURL = Value
+        saveSettings()
+    end
+})
+
+local WebhookIntervalSlider = WebhookGroupbox:AddSlider("WebhookInterval", {
+    Text = "Send Interval (minutes)",
+    Default = 5,
+    Min = 1,
+    Max = 60,
+    Rounding = 1,
+    Compact = true,
+    Callback = function(Value)
+        webhookInterval = Value
+        saveSettings()
+    end
+})
+
+WebhookGroupbox:AddButton("Send Test Webhook", function()
+    if webhookEnabled and webhookURL ~= "" then
+        addToConsole("Sending test webhook...")
+        sendWebhook()
+    else
+        addToConsole("❌ Enable webhook and set URL first")
+    end
+end)
+
 -- Console Tab
 local ConsoleTab = Window:AddTab("Console", "terminal")
 local ConsoleGroupbox = ConsoleTab:AddLeftGroupbox("Output")
-consoleLabel = ConsoleGroupbox:AddLabel({ Text = "Lavender Hub v0.2 Ready", DoesWrap = true })
+consoleLabel = ConsoleGroupbox:AddLabel({ Text = "Lavender Hub v0.4 Ready", DoesWrap = true })
 
 -- Debug Tab
 local DebugTab = Window:AddTab("Debug", "bug")
@@ -1091,10 +1628,6 @@ DebugActionsGroupbox:AddButton("Clear Console", function()
     end
 end)
 
-DebugActionsGroupbox:AddButton("Claim Hive", function()
-    autoClaimHive()
-end)
-
 DebugActionsGroupbox:AddButton("Equip Tools", function()
     equipAllTools()
     addToConsole("Manually equipped all tools")
@@ -1105,6 +1638,8 @@ local StatusGroupbox = MainTab:AddRightGroupbox("Status")
 local StatusLabel = StatusGroupbox:AddLabel("Status: Idle")
 local PollenLabel = StatusGroupbox:AddLabel("Pollen: 0")
 local HourlyHoneyLabel = StatusGroupbox:AddLabel("Hourly Honey: 0")
+local SprinklerStatusLabel = StatusGroupbox:AddLabel("Sprinklers: 0 placed")
+
 -- UI Settings Tab
 local UISettingsTab = Window:AddTab("UI Settings", "settings")
 ThemeManager:SetLibrary(Library)
@@ -1121,6 +1656,9 @@ player.Idled:Connect(function()
     VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
 end)
 
+-- Setup death detection on startup
+setupDeathDetection()
+
 -- Optimized Main Loops
 local lastHeartbeatTime = 0
 RunService.Heartbeat:Connect(function()
@@ -1134,10 +1672,12 @@ RunService.Heartbeat:Connect(function()
     updatePerformanceStats()
     autoEquipTools()
     updateHoneyStats()
+    sendWebhook()
     
-    -- Update status display
+    -- Update status display - USING CORRECT FORMATTING
     local statusText = "Idle"
     local currentPollen = getCurrentPollen()
+    local currentHoney = getCurrentHoney()
     
     if toggles.autoFarm then
         if toggles.isFarming and toggles.atField then
@@ -1152,29 +1692,34 @@ RunService.Heartbeat:Connect(function()
     end
     
     StatusLabel:SetText("Status: " .. statusText)
-    PollenLabel:SetText("Pollen: " .. formatNumber(currentPollen))
-    HourlyHoneyLabel:SetText("Hourly Honey: " .. formatNumber(honeyStats.hourlyRate))
+    PollenLabel:SetText("Pollen: " .. formatNumberCorrect(currentPollen))
+    HourlyHoneyLabel:SetText("Hourly Honey: " .. formatNumberCorrect(honeyStats.hourlyRate))
+    SprinklerStatusLabel:SetText("Sprinklers: " .. placedSprinklersCount .. "/" .. expectedSprinklerCount .. " placed")
     
     -- Update debug labels
-    HoneyMadeLabel:SetText("Honey Made: " .. formatNumber(honeyStats.honeyMade))
-    HourlyRateLabel:SetText("Hourly Rate: " .. formatNumber(honeyStats.hourlyRate))
+    HoneyMadeLabel:SetText("Honey Made: " .. formatNumberCorrect(honeyStats.honeyMade))
+    HourlyRateLabel:SetText("Hourly Rate: " .. formatNumberCorrect(honeyStats.hourlyRate))
 end)
 
 -- Stats Update Loop
 spawn(function()
     while task.wait(1) do
         local currentPollen = getCurrentPollen()
+        local currentHoney = getCurrentHoney()
         
         WrappedLabel:SetText(string.format(
-            "Pollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s",
-            formatNumber(currentPollen),
+            "Honey: %s\nPollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s\nAuto Sprinklers: %s\nSprinkler Type: %s",
+            formatNumberCorrect(currentHoney),
+            formatNumberCorrect(currentPollen),
             toggles.field,
             displayHiveName,
             toggles.movementMethod,
             toggles.autoDig and "ON" or "OFF",
             toggles.autoEquip and "ON" or "OFF",
             toggles.antiLag and "ON" or "OFF",
-            formatNumber(honeyStats.hourlyRate)
+            formatNumberCorrect(honeyStats.hourlyRate),
+            autoSprinklersEnabled and "ON" or "OFF",
+            selectedSprinkler
         ))
     end
 end)
@@ -1192,21 +1737,24 @@ MovementMethodDropdown:Set(toggles.movementMethod)
 TweenSpeedSlider:Set(toggles.tweenSpeed)
 WalkspeedToggle:Set(toggles.walkspeedEnabled)
 WalkspeedSlider:Set(toggles.walkspeed)
-
--- AUTO CLAIM ALL HIVES ON STARTUP
-addToConsole("🚀 Lavender Hub v0.2 Starting...")
-addToConsole("🔄 Auto-claiming hives...")
-autoClaimHive()
-
-task.wait(3)
+AutoSprinklersToggle:Set(autoSprinklersEnabled)
+SprinklerDropdown:Set(selectedSprinkler)
+WebhookToggle:Set(webhookEnabled)
+WebhookURLBox:Set(webhookURL)
+WebhookIntervalSlider:Set(webhookInterval)
 
 -- Update owned hive after claiming
 ownedHive = getOwnedHive()
 displayHiveName = ownedHive and "Hive" or "None"
 
--- Initialize honey tracking
+-- Initialize honey tracking - STARTS AT 0
 honeyStats.startHoney = getCurrentHoney()
 honeyStats.currentHoney = honeyStats.startHoney
+honeyStats.lastHoneyValue = honeyStats.startHoney
+honeyStats.trackingStarted = false
+honeyStats.firstAutoFarmEnabled = false
+honeyStats.honeyMade = 0
+honeyStats.hourlyRate = 0
 
 -- Run anti-lag on startup if enabled
 if toggles.antiLag then
@@ -1216,6 +1764,9 @@ end
 
 addToConsole("✅ Lavender Hub Ready!")
 addToConsole("🎯 Auto Farm System Ready!")
+addToConsole("🚿 IMPROVED Auto Sprinklers System Ready!")
+addToConsole("💀 Death Respawn System Ready!")
+addToConsole("🌐 Webhook System Ready!")
 if ownedHive then
     addToConsole("🏠 Owned Hive: " .. ownedHive)
 else
