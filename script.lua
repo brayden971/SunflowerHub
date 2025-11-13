@@ -27,6 +27,9 @@ local webhookInterval = 5 -- minutes
 local lastWebhookTime = 0
 local webhookCooldownActive = false
 
+-- NEW: Script Uptime Tracking
+local scriptStartTime = tick()
+
 -- Field Coordinates - UPDATED WITH NEW FIELDS
 local fieldCoords = {
     ["Mushroom Field"] = Vector3.new(-896.98, 73.50, -124.88),
@@ -99,7 +102,9 @@ local honeyStats = {
     lastHoneyValue = 0,
     trackingStarted = false,
     startTrackingTime = 0,
-    firstAutoFarmEnabled = false
+    firstAutoFarmEnabled = false,
+    sessionHoney = 0, -- NEW: Session honey tracking
+    dailyHoney = 0    -- NEW: Daily honey tracking
 }
 
 -- IMPROVED AUTO SPRINKLERS SYSTEM - MORE STABLE
@@ -276,6 +281,21 @@ local function formatNumberCorrect(num)
     end
 end
 
+-- NEW: Format time function for uptime
+local function formatTime(seconds)
+    local hours = math.floor(seconds / 3600)
+    local minutes = math.floor((seconds % 3600) / 60)
+    local secs = math.floor(seconds % 60)
+    
+    if hours > 0 then
+        return string.format("%dh %dm %ds", hours, minutes, secs)
+    elseif minutes > 0 then
+        return string.format("%dm %ds", minutes, secs)
+    else
+        return string.format("%ds", secs)
+    end
+end
+
 local function addToConsole(message)
     local timestamp = os.date("%H:%M:%S")
     local logEntry = "[" .. timestamp .. "] " .. message
@@ -400,10 +420,11 @@ local function useBlueBooster()
     addToConsole("🔵 Blue Booster used")
 end
 
+-- FIXED: Wealth Clock function
 local function useWealthClock()
     local args = {
-        "Wealth Clock",
-        0
+        "Ticket Dispenser",
+        22
     }
     game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("UseMachine"):FireServer(unpack(args))
     lastWealthClockTime = tick()
@@ -545,6 +566,8 @@ local function updateHoneyStats()
         honeyStats.lastHoneyValue = currentHoney
         honeyStats.honeyMade = 0
         honeyStats.hourlyRate = 0
+        honeyStats.sessionHoney = 0 -- NEW: Reset session honey
+        honeyStats.dailyHoney = 0   -- NEW: Reset daily honey
         honeyStats.lastHoneyCheck = tick()
         addToConsole("📊 Honey tracking started")
         return
@@ -560,6 +583,8 @@ local function updateHoneyStats()
     if currentHoney > honeyStats.lastHoneyValue then
         local honeyGained = currentHoney - honeyStats.lastHoneyValue
         honeyStats.honeyMade = honeyStats.honeyMade + honeyGained
+        honeyStats.sessionHoney = honeyStats.sessionHoney + honeyGained -- NEW: Track session honey
+        honeyStats.dailyHoney = honeyStats.dailyHoney + honeyGained     -- NEW: Track daily honey
         honeyStats.currentHoney = currentHoney
         honeyStats.lastHoneyValue = currentHoney
         
@@ -1429,7 +1454,7 @@ local function clearVisitedTokens()
     end
 end
 
--- FIXED: Webhook System with cooldown protection
+-- UPDATED: Webhook System with new stats
 local function sendWebhook()
     if not webhookEnabled or webhookURL == "" then return end
     
@@ -1455,6 +1480,7 @@ local function sendWebhook()
     
     local currentHoney = getCurrentHoney()
     local currentPollen = getCurrentPollen()
+    local scriptUptime = tick() - scriptStartTime
     
     local embed = {
         title = "Lavender Hub Stats",
@@ -1476,8 +1502,23 @@ local function sendWebhook()
                 inline = true
             },
             {
+                name = "Session Honey",
+                value = formatNumberCorrect(honeyStats.sessionHoney),
+                inline = true
+            },
+            {
+                name = "Daily Honey",
+                value = formatNumberCorrect(honeyStats.dailyHoney),
+                inline = true
+            },
+            {
                 name = "Hourly Honey Rate",
                 value = formatNumberCorrect(honeyStats.hourlyRate) .. "/h",
+                inline = true
+            },
+            {
+                name = "Script Uptime",
+                value = formatTime(scriptUptime),
                 inline = true
             },
             {
@@ -1865,6 +1906,8 @@ debugLabels.objects = DebugGroupbox:AddLabel("Objects Deleted: 0")
 local HoneyStatsGroupbox = DebugTab:AddRightGroupbox("Honey Statistics")
 local HoneyMadeLabel = HoneyStatsGroupbox:AddLabel("Honey Made: 0")
 local HourlyRateLabel = HoneyStatsGroupbox:AddLabel("Hourly Rate: 0")
+local SessionHoneyLabel = HoneyStatsGroupbox:AddLabel("Session Honey: 0")
+local DailyHoneyLabel = HoneyStatsGroupbox:AddLabel("Daily Honey: 0")
 
 local DebugActionsGroupbox = DebugTab:AddRightGroupbox("Actions")
 DebugActionsGroupbox:AddButton("Run Anti-Lag", function()
@@ -1954,6 +1997,8 @@ RunService.Heartbeat:Connect(function()
     -- Update debug labels
     HoneyMadeLabel:SetText("Honey Made: " .. formatNumberCorrect(honeyStats.honeyMade))
     HourlyRateLabel:SetText("Hourly Rate: " .. formatNumberCorrect(honeyStats.hourlyRate))
+    SessionHoneyLabel:SetText("Session Honey: " .. formatNumberCorrect(honeyStats.sessionHoney))
+    DailyHoneyLabel:SetText("Daily Honey: " .. formatNumberCorrect(honeyStats.dailyHoney))
 end)
 
 -- Stats Update Loop
@@ -1963,7 +2008,7 @@ spawn(function()
         local currentHoney = getCurrentHoney()
         
         WrappedLabel:SetText(string.format(
-            "Honey: %s\nPollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s\nAuto Sprinklers: %s\nSprinkler Type: %s\nTicket Converters: %s",
+            "Honey: %s\nPollen: %s\nField: %s\nHive: %s\nMove: %s\nDig: %s\nEquip: %s\nAnti-Lag: %s\nHourly Honey: %s\nAuto Sprinklers: %s\nSprinkler Type: %s\nTicket Converters: %s\nSession Honey: %s\nDaily Honey: %s",
             formatNumberCorrect(currentHoney),
             formatNumberCorrect(currentPollen),
             toggles.field,
@@ -1975,7 +2020,9 @@ spawn(function()
             formatNumberCorrect(honeyStats.hourlyRate),
             autoSprinklersEnabled and "ON" or "OFF",
             selectedSprinkler,
-            useTicketConverters and "ON" or "OFF"
+            useTicketConverters and "ON" or "OFF",
+            formatNumberCorrect(honeyStats.sessionHoney),
+            formatNumberCorrect(honeyStats.dailyHoney)
         ))
     end
 end)
@@ -2016,6 +2063,8 @@ honeyStats.trackingStarted = false
 honeyStats.firstAutoFarmEnabled = false
 honeyStats.honeyMade = 0
 honeyStats.hourlyRate = 0
+honeyStats.sessionHoney = 0
+honeyStats.dailyHoney = 0
 
 -- Run anti-lag on startup if enabled
 if toggles.antiLag then
